@@ -1,0 +1,63 @@
+name: Generate Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'routes/**'
+      - 'resources/js/**'
+
+permissions:
+  contents: write
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Find Laravel + React Source Files
+        run: |
+          mkdir -p docs
+          find app routes resources/js \
+            \( -name "*.php" -o -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" \) \
+            | head -n 15 > source_files.txt
+          echo "Found files:"
+          cat source_files.txt
+
+      - name: Prepare Code for Claude
+        run: |
+          echo "### Laravel + Inertia Source Code\n" > docs_input.txt
+          while read file; do
+            echo -e "\n\n### File: $file\n" >> docs_input.txt
+            head -n 150 "$file" >> docs_input.txt
+          done < source_files.txt
+
+      - name: Generate Docs with Claude
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          RESPONSE=$(curl -s -X POST https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: $CLAUDE_API_KEY" \
+            -d "{
+              \"model\": \"claude-sonnet-4-20250514\",
+              \"max_tokens\": 4000,
+              \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Generate detailed markdown documentation for a Laravel backend with Inertia React frontend. Describe routes, controllers, components, and props if found.\n\n$(cat docs_input.txt | sed 's/\"/\\"/g')\"
+              }]
+            }")
+
+          echo "$RESPONSE" | jq -r '.content[0].text // "No documentation returned."' > docs/API.md
+
+      - name: Commit and Push Docs
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add docs/API.md
+          git commit -m "📚 Auto-generate Laravel + Inertia docs [skip ci]" || echo "No changes"
+          git push || echo "Push failed"
